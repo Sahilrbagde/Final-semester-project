@@ -1,0 +1,99 @@
+-------------------------------Arduino ide libraries-------------------------------- 
+
+    --------BOARDS MANAGER---------
+
+1. Arduino ESP32 Boards - version(2.0.18)
+
+
+    --------libraries---------
+
+1. U8g2 -----------oled display
+2. ESP32Servo --------servo 
+3. Adafruit PWM Servo Driver Library ------servo moter driver 
+
+
+
+
+
+
+
+-------------------------------Python libraries--------------------------------
+
+
+sudo apt update
+sudo apt upgrade -y
+...............................
+
+sudo apt install -y \
+python3 \
+python3-pip \
+python3-venv \
+git \
+wget \
+curl \
+nano \
+i2c-tools \
+v4l-utils
+...............................
+
+         Enable hardware interfaces
+
+1.sudo raspi-config
+              {Interface Options}
+              {      ↓          }
+              {     I2C         }
+              {      ↓          }
+              {    Enable       }
+
+2.sudo reboot
+3.ls /dev/i2c*
+...................................
+             
+         Raspberry Pi camera
+
+1. sudo apt install -y python3-picamera2
+2. sudo apt install -y libcamera-apps
+3. rpicam-hello --list-cameras
+4. python3 -c "from picamera2 import Picamera2; print('Picamera2 OK')"            ---- test
+
+....................................
+
+              Create the Python project environment
+
+1. mkdir -p ~/yolo/sem_7
+   cd ~/yolo/sem_7
+2.python3 -m venv --system-site-packages venv
+3.source venv/bin/activate
+                     {(venv) -----@raspberrypi:~/yolo/sem_7 $}
+
+.....................................
+
+               Image processing / computer vision
+
+1. pip install opencv-python-headless
+2. pip install numpy
+3. python3 -c "import cv2; print('OpenCV:', cv2.__version__)"                     ---- test
+4. python3 -c "import numpy; print('NumPy:', numpy.__version__)"                  ---- test
+
+.....................................
+ 
+                    OLED display
+
+1. pip install luma.oled
+2. pip install Pillow
+3. python3 -c "from luma.oled.device import sh1106; print('SH1106 library OK')"   ---- test
+
+.......................................
+
+                   PCA9685 servo driver
+
+1. pip install smbus2
+2. python3 -c "import smbus2; print('SMBus2 OK')"                                 ---- test
+
+
+
+
+
+
+
+
