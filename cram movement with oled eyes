@@ -1,0 +1,1385 @@
+import time
+import threading
+import random
+from smbus2 import SMBus
+
+
+# ============================================================
+# PCA9685 CONFIGURATION
+# ============================================================
+
+PCA9685_ADDRESS = 0x40
+
+# Software I2C bus:
+# GPIO17 = SDA
+# GPIO27 = SCL
+I2C_BUS = 3
+
+PWM_FREQUENCY = 50
+
+# Same oscillator frequency used in your Arduino code
+OSCILLATOR_FREQUENCY = 27000000
+
+# Servo pulse range
+PWM_MIN_US = 1200
+PWM_MAX_US = 2400
+
+# PCA9685 registers
+MODE1 = 0x00
+MODE2 = 0x01
+PRESCALE = 0xFE
+LED0_ON_L = 0x06
+
+
+# ============================================================
+# SHARED I2C LOCK AND BUS
+# ============================================================
+
+# Prevent OLED and PCA9685 transactions from overlapping.
+I2C_LOCK = threading.RLock()
+bus = SMBus(I2C_BUS)
+
+
+# ============================================================
+# SERVO VARIABLES
+# ============================================================
+
+s0 = 90
+s1 = 165
+
+s2 = 90
+s3 = 165
+
+s4 = 90
+s5 = 165
+
+s6 = 90
+s7 = 165
+
+s8 = 90
+s9 = 165
+
+s10 = 90
+s11 = 165
+
+s12 = 90
+s13 = 165
+
+s14 = 90
+s15 = 165
+
+
+# ============================================================
+# PCA9685 INITIALIZATION
+# ============================================================
+
+def init_pca9685():
+
+    print("Initializing PCA9685...")
+
+    # Sleep mode
+    bus.write_byte_data(
+        PCA9685_ADDRESS,
+        MODE1,
+        0x10
+    )
+
+    # Calculate prescale
+    prescale = int(
+        OSCILLATOR_FREQUENCY /
+        (4096 * PWM_FREQUENCY) - 1
+    )
+
+    print("PCA9685 prescale:", prescale)
+
+    bus.write_byte_data(
+        PCA9685_ADDRESS,
+        PRESCALE,
+        prescale
+    )
+
+    # Wake up
+    bus.write_byte_data(
+        PCA9685_ADDRESS,
+        MODE1,
+        0x00
+    )
+
+    time.sleep(0.005)
+
+    # Auto increment enabled
+    bus.write_byte_data(
+        PCA9685_ADDRESS,
+        MODE1,
+        0x20
+    )
+
+    # Output driver configuration
+    bus.write_byte_data(
+        PCA9685_ADDRESS,
+        MODE2,
+        0x04
+    )
+
+    time.sleep(0.01)
+
+    print("PCA9685 initialized successfully")
+
+
+# ============================================================
+# ANGLE -> PCA9685 PWM
+# ============================================================
+
+def angle_to_pulse(angle):
+
+    # Limit angle
+    angle = max(0, min(180, angle))
+
+    # Convert angle to microseconds
+    pulse_us = (
+        PWM_MIN_US
+        + (angle / 180.0)
+        * (PWM_MAX_US - PWM_MIN_US)
+    )
+
+    # Convert microseconds to PCA9685 counts
+    pulse = int(
+        (pulse_us * 4096) / 20000
+    )
+
+    return pulse
+
+
+# ============================================================
+# SAFE I2C WRITE
+# ============================================================
+
+def i2c_write_block(register, data, retries=3):
+
+    for attempt in range(retries):
+
+        try:
+
+            bus.write_i2c_block_data(
+                PCA9685_ADDRESS,
+                register,
+                data
+            )
+
+            return True
+
+        except OSError as e:
+
+            print(
+                f"I2C error on register 0x{register:02X}, "
+                f"attempt {attempt + 1}/{retries}: {e}"
+            )
+
+            if attempt < retries - 1:
+
+                time.sleep(0.01)
+
+            else:
+
+                raise
+
+
+# ============================================================
+# WRITE 8 PCA9685 CHANNELS
+# ============================================================
+
+def write_8_channels(start_channel, angles):
+
+    data = []
+
+    for angle in angles:
+
+        pulse = angle_to_pulse(angle)
+
+        # ON = 0
+        on_low = 0
+        on_high = 0
+
+        # OFF = pulse
+        off_low = pulse & 0xFF
+        off_high = (pulse >> 8) & 0x0F
+
+        data.append(on_low)
+        data.append(on_high)
+        data.append(off_low)
+        data.append(off_high)
+
+    # Starting register
+    register = LED0_ON_L + (4 * start_channel)
+
+    # 8 channels x 4 bytes = 32 bytes
+    i2c_write_block(register, data)
+
+
+# ============================================================
+# UPDATE ALL 16 SERVOS
+# ============================================================
+
+def update_servos():
+
+    angles = [
+        s0, s1,
+        s2, s3,
+        s4, s5,
+        s6, s7,
+        s8, s9,
+        s10, s11,
+        s12, s13,
+        s14, s15
+    ]
+
+    # Keep both channel groups together so OLED refreshes cannot
+    # interrupt a multi-channel servo update on the shared I2C bus.
+    with I2C_LOCK:
+        write_8_channels(0, angles[0:8])
+        time.sleep(0.002)
+        write_8_channels(8, angles[8:16])
+
+
+# ============================================================
+# STOP POSITION
+# ============================================================
+
+def stop_robot():
+
+    global s0, s1, s2, s3
+    global s4, s5, s6, s7
+    global s8, s9, s10, s11
+    global s12, s13, s14, s15
+
+    s0 = 40
+    s1 = 170
+
+    s2 = 130
+    s3 = 90
+
+    s4 = 0
+    s5 = 170
+
+    s6 = 30
+    s7 = 0
+
+    s8 = 120
+    s9 = 20
+
+    s10 = 20
+    s11 = 10
+
+    s12 = 90
+    s13 = 90
+
+    s14 = 90
+    s15 = 90
+
+    update_servos()
+
+
+# ============================================================
+# FORWARD
+# ============================================================
+
+def forward():
+
+    global s0, s1, s2, s3
+    global s4, s5, s6, s7
+    global s8, s9, s10, s11
+
+    print("FORWARD")
+
+    # --------------------------------------------------------
+    # STEP 1
+    # --------------------------------------------------------
+
+    s2 = 130
+    s3 = 90
+
+    s6 = 30
+    s7 = 150
+
+    s10 = 20
+    s11 = 160
+
+    s0 = 40
+    s1 = 170
+
+    s4 = 0
+    s5 = 170
+
+    s8 = 120
+    s9 = 20
+
+
+    update_servos()
+
+    time.sleep(0.3)
+
+    # --------------------------------------------------------
+    # STEP 2
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 90
+
+    s6 = 150
+    s7 = 150
+
+    s10 = 150
+    s11 = 160
+
+    s0 = 160
+    s1 = 170
+
+    s4 = 110
+    s5 = 170
+
+    s8 = 50
+    s9 = 20
+
+    update_servos()
+
+    time.sleep(0.3)
+
+    # --------------------------------------------------------
+    # STEP 3
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 90
+
+    s6 = 150
+    s7 = 0
+
+    s10 = 150
+    s11 = 10
+
+    s0 = 160
+    s1 = 160
+
+    s4 = 110
+    s5 = 160
+
+    s8 = 50
+    s9 = 20
+
+    update_servos()
+
+    time.sleep(0.1)
+
+    # --------------------------------------------------------
+    # STEP 4
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 90
+
+    s6 = 150
+    s7 = 0
+
+    s10 = 150
+    s11 = 10
+
+    s0 = 160
+    s1 = 0
+
+    s4 = 110
+    s5 = 10
+
+    s8 = 50
+    s9 = 180
+
+    update_servos()
+
+    time.sleep(0.3)
+
+    # --------------------------------------------------------
+    # STEP 5
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 90
+
+    s6 = 150
+    s7 = 0
+
+    s10 = 150
+    s11 = 10
+
+    s0 = 40
+    s1 = 0
+
+    s4 = 0
+    s5 = 10
+
+    s8 = 120
+    s9 = 180
+
+    update_servos()
+
+    time.sleep(0.3)
+
+    # --------------------------------------------------------
+    # STEP 6
+    # --------------------------------------------------------
+
+    s2 = 130
+    s3 = 90
+
+    s6 = 30
+    s7 = 0
+
+    s10 = 20
+    s11 = 10
+
+    s0 = 40
+    s1 = 160
+
+    s4 = 0
+    s5 = 170
+
+    s8 = 120
+    s9 = 20
+
+    update_servos()
+
+    time.sleep(0.3)
+
+
+# ============================================================
+# REST
+# ============================================================
+
+def rest():
+
+    global s0, s1, s2, s3
+    global s4, s5, s6, s7
+    global s8, s9, s10, s11
+
+    print("REST")
+
+    s0 = 40
+    s1 = 20
+
+    s2 = 130
+    s3 = 165
+
+    s4 = 0
+    s5 = 30
+
+    s6 = 30
+    s7 = 130
+
+    s8 = 120
+    s9 = 160
+
+    s10 = 40
+    s11 = 140
+
+    update_servos()
+    time.sleep(1)
+
+    stop_robot()
+    time.sleep(1)
+
+
+# ============================================================
+# BACKWARD
+# ============================================================
+
+def backward():
+
+    global s0, s1, s2, s3
+    global s4, s5, s6, s7
+    global s8, s9, s10, s11
+    global s12, s13, s14, s15
+
+    print("BACKWARD")
+
+    # --------------------------------------------------------
+    # STEP 1
+    # --------------------------------------------------------
+
+    s0 = 40
+    s1 = 60
+
+    s2 = 140
+    s3 = 90
+
+    s4 = 40
+    s5 = 90
+
+    s6 = 140
+    s7 = 60
+
+    s8 = 40
+    s9 = 60
+
+    s10 = 140
+    s11 = 90
+
+    s12 = 40
+    s13 = 90
+
+    s14 = 140
+    s15 = 60
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 2
+    # --------------------------------------------------------
+
+    s0 = 140
+    s1 = 60
+
+    s6 = 40
+    s7 = 60
+
+    s8 = 140
+    s9 = 60
+
+    s14 = 40
+    s15 = 60
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 3
+    # --------------------------------------------------------
+
+    s0 = 140
+    s1 = 90
+
+    s2 = 140
+    s3 = 90
+
+    s4 = 40
+    s5 = 90
+
+    s6 = 40
+    s7 = 90
+
+    s8 = 140
+    s9 = 90
+
+    s10 = 140
+    s11 = 90
+
+    s12 = 40
+    s13 = 90
+
+    s14 = 40
+    s15 = 90
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 4
+    # --------------------------------------------------------
+
+    s2 = 140
+    s3 = 60
+
+    s4 = 40
+    s5 = 60
+
+    s10 = 140
+    s11 = 60
+
+    s12 = 40
+    s13 = 60
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 5
+    # --------------------------------------------------------
+
+    s0 = 140
+    s1 = 90
+
+    s2 = 40
+    s3 = 60
+
+    s4 = 140
+    s5 = 60
+
+    s6 = 40
+    s7 = 90
+
+    s8 = 140
+    s9 = 90
+
+    s10 = 40
+    s11 = 60
+
+    s12 = 140
+    s13 = 60
+
+    s14 = 40
+    s15 = 90
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 6
+    # --------------------------------------------------------
+
+    s0 = 140
+    s1 = 90
+
+    s2 = 40
+    s3 = 90
+
+    s4 = 140
+    s5 = 90
+
+    s6 = 40
+    s7 = 90
+
+    s8 = 140
+    s9 = 90
+
+    s10 = 40
+    s11 = 90
+
+    s12 = 140
+    s13 = 90
+
+    s14 = 40
+    s15 = 90
+
+    update_servos()
+
+    time.sleep(1)
+
+
+# ============================================================
+# LEFT
+# ============================================================
+
+def left():
+
+    global s0, s1, s2, s3
+    global s4, s5, s6, s7
+    global s8, s9, s10, s11
+    global s12, s13, s14, s15
+
+    print("LEFT")
+
+    # --------------------------------------------------------
+    # STEP 1
+    # --------------------------------------------------------
+
+    s2 = 90
+    s3 = 160
+
+    s6 = 90
+    s7 = 0
+
+    s10 = 90
+    s11 = 10
+
+    s0 = 90
+    s1 = 160
+
+    s4 = 90
+    s5 = 170
+
+    s8 = 90
+    s9 = 20
+
+    update_servos()
+
+    time.sleep(0.5)
+
+    # --------------------------------------------------------
+    # STEP 2
+    # --------------------------------------------------------
+
+    s2 = 90
+    s3 = 160
+
+    s6 = 90
+    s7 = 0
+
+    s10 = 90
+    s11 = 10
+
+    s0 = 90
+    s1 = 0
+
+    s4 = 90
+    s5 = 10
+
+    s8 = 90
+    s9 = 180
+
+    update_servos()
+
+    time.sleep(0.5)
+
+    # --------------------------------------------------------
+    # STEP 3
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 160
+
+    s6 = 30
+    s7 = 0
+
+    s10 = 20
+    s11 = 10
+
+    s0 = 160
+    s1 = 0
+
+    s4 = 110
+    s5 = 10
+
+    s8 = 120
+    s9 = 180
+
+    update_servos()
+
+    time.sleep(0.5)
+
+    # --------------------------------------------------------
+    # STEP 4
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 160
+
+    s6 = 30
+    s7 = 0
+
+    s10 = 20
+    s11 = 10
+
+    s0 = 160
+    s1 = 160
+
+    s4 = 110
+    s5 = 170
+
+    s8 = 120
+    s9 = 20
+
+    update_servos()
+
+    time.sleep(0.5)
+
+    # --------------------------------------------------------
+    # STEP 5
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 160
+
+    s6 = 30
+    s7 = 150
+
+    s10 = 20
+    s11 = 160
+
+    s0 = 40
+    s1 = 160
+
+    s4 = 0
+    s5 = 170
+
+    s8 = 50
+    s9 = 20
+
+    update_servos()
+
+    time.sleep(0.5)
+
+    # --------------------------------------------------------
+    # STEP 6
+    # --------------------------------------------------------
+
+    s2 = 90
+    s3 = 160
+
+    s6 = 90
+    s7 = 0
+
+    s10 = 90
+    s11 = 10
+
+    s0 = 90
+    s1 = 160
+
+    s4 = 90
+    s5 = 170
+
+    s8 = 90
+    s9 = 20
+
+    update_servos()
+
+    time.sleep(0.5)
+
+
+# ============================================================
+# RIGHT
+# ============================================================
+
+def right():
+
+    global s0, s1, s2, s3
+    global s4, s5, s6, s7
+    global s8, s9, s10, s11
+    global s12, s13, s14, s15
+
+    print("RIGHT")
+
+    # --------------------------------------------------------
+    # STEP 1
+    # --------------------------------------------------------
+
+    s0 = 90
+    s1 = 60
+
+    s2 = 90
+    s3 = 90
+
+    s4 = 90
+    s5 = 90
+
+    s6 = 90
+    s7 = 60
+
+    s8 = 90
+    s9 = 60
+
+    s10 = 90
+    s11 = 90
+
+    s12 = 90
+    s13 = 90
+
+    s14 = 90
+    s15 = 60
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 2
+    # --------------------------------------------------------
+
+    s0 = 140
+    s1 = 60
+
+    s6 = 140
+    s7 = 60
+
+    s8 = 140
+    s9 = 60
+
+    s14 = 140
+    s15 = 60
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 3
+    # --------------------------------------------------------
+
+    s0 = 140
+    s1 = 90
+
+    s6 = 140
+    s7 = 90
+
+    s8 = 140
+    s9 = 90
+
+    s14 = 140
+    s15 = 90
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 4
+    # --------------------------------------------------------
+
+    s2 = 90
+    s3 = 60
+
+    s4 = 90
+    s5 = 60
+
+    s10 = 90
+    s11 = 60
+
+    s12 = 90
+    s13 = 60
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 5
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 60
+
+    s4 = 40
+    s5 = 60
+
+    s10 = 40
+    s11 = 60
+
+    s12 = 40
+    s13 = 60
+
+    update_servos()
+
+    time.sleep(1)
+
+    # --------------------------------------------------------
+    # STEP 6
+    # --------------------------------------------------------
+
+    s2 = 40
+    s3 = 90
+
+    s4 = 40
+    s5 = 90
+
+    s10 = 40
+    s11 = 90
+
+    s12 = 40
+    s13 = 90
+
+    update_servos()
+
+    time.sleep(1)
+
+
+
+
+# ============================================================
+# OLED EYES ANIMATION
+# ============================================================
+
+from luma.core.interface.serial import i2c
+from luma.oled.device import sh1106
+from PIL import Image, ImageDraw
+
+OLED_WIDTH = 128
+OLED_HEIGHT = 64
+
+LEFT_X = 34
+RIGHT_X = 94
+CENTER_Y = 32
+
+EYE_WIDTH = 28
+EYE_HEIGHT = 38
+CORNER_RADIUS = 9
+
+MAX_X = 7
+MAX_Y = 5
+
+eye_x = 0
+eye_y = 0
+# -1 = look left while the robot turns left; +1 = look right.
+eye_direction = 0
+
+oled_stop_event = threading.Event()
+
+
+def show_image(draw_function):
+    image = Image.new("1", (OLED_WIDTH, OLED_HEIGHT), 0)
+    draw = ImageDraw.Draw(image)
+    draw_function(draw)
+
+    # The robot uses this same I2C bus. Lock each complete OLED
+    # refresh so its transfer cannot overlap a PCA9685 update.
+    with I2C_LOCK:
+        display.display(image)
+
+
+def draw_normal(
+    x_offset=0,
+    y_offset=0,
+    left_height=EYE_HEIGHT,
+    right_height=EYE_HEIGHT
+):
+    def painter(draw):
+        for cx, height in (
+            (LEFT_X, left_height),
+            (RIGHT_X, right_height)
+        ):
+            height = max(2, min(EYE_HEIGHT, int(height)))
+
+            x1 = cx - EYE_WIDTH // 2 + x_offset
+            x2 = cx + EYE_WIDTH // 2 + x_offset
+            y1 = CENTER_Y - height // 2 + y_offset
+            y2 = y1 + height
+
+            draw.rounded_rectangle(
+                (x1, y1, x2, y2),
+                radius=min(CORNER_RADIUS, height // 2),
+                fill=255
+            )
+
+    show_image(painter)
+
+
+def draw_closed(sleepy=False):
+    def painter(draw):
+        for cx in (LEFT_X, RIGHT_X):
+            if sleepy:
+                draw.arc(
+                    (
+                        cx - EYE_WIDTH // 2,
+                        CENTER_Y - 5,
+                        cx + EYE_WIDTH // 2,
+                        CENTER_Y + 8
+                    ),
+                    start=190,
+                    end=350,
+                    fill=255,
+                    width=3
+                )
+            else:
+                draw.line(
+                    (
+                        cx - EYE_WIDTH // 2,
+                        CENTER_Y,
+                        cx + EYE_WIDTH // 2,
+                        CENTER_Y
+                    ),
+                    fill=255,
+                    width=3
+                )
+
+    show_image(painter)
+
+
+def blink():
+    global eye_x, eye_y
+
+    for height in [10, 2]:
+        draw_normal(
+            eye_x, eye_y,
+            left_height=height,
+            right_height=height
+        )
+        time.sleep(0.003)
+
+    draw_closed()
+    time.sleep(0.007)
+
+    for height in [12, 38]:
+        draw_normal(
+            eye_x, eye_y,
+            left_height=height,
+            right_height=height
+        )
+        time.sleep(0.003)
+
+
+def wake_up():
+    print("Waking up...")
+
+    draw_closed(sleepy=True)
+    time.sleep(0.1)
+
+    for height in [6, 15, 28, 38]:
+        draw_normal(
+            left_height=height,
+            right_height=height
+        )
+        time.sleep(0.012)
+
+    draw_normal(left_height=29, right_height=29)
+    time.sleep(0.04)
+
+    draw_normal()
+    time.sleep(0.04)
+
+    blink()
+
+
+def happy_face():
+    print("Happy!")
+
+    def painter(draw):
+        for cx in (LEFT_X, RIGHT_X):
+            draw.arc(
+                (
+                    cx - EYE_WIDTH // 2,
+                    CENTER_Y - 11,
+                    cx + EYE_WIDTH // 2,
+                    CENTER_Y + 13
+                ),
+                start=200,
+                end=340,
+                fill=255,
+                width=4
+            )
+
+    show_image(painter)
+    time.sleep(0.33)
+
+    draw_normal()
+    time.sleep(0.04)
+
+
+def move_eyes(target_x, target_y, duration=0.04):
+    global eye_x, eye_y
+
+    start_x = eye_x
+    start_y = eye_y
+
+    steps = 2
+
+    for i in range(1, steps + 1):
+        t = i / steps
+        smooth = t * t * (3 - 2 * t)
+
+        eye_x = round(
+            start_x + (target_x - start_x) * smooth
+        )
+        eye_y = round(
+            start_y + (target_y - start_y) * smooth
+        )
+
+        draw_normal(eye_x, eye_y)
+        time.sleep(duration / steps)
+
+
+def curious_look():
+    print("Looking around...")
+
+    move_eyes(-MAX_X, 0, 0.04)
+    time.sleep(0.05)
+
+    move_eyes(-3, -MAX_Y, 0.04)
+    time.sleep(0.04)
+
+    move_eyes(MAX_X, 0, 0.05)
+    time.sleep(0.06)
+
+    move_eyes(3, MAX_Y, 0.04)
+    time.sleep(0.04)
+
+    move_eyes(0, 0, 0.04)
+
+
+def oled_animation():
+    global eye_x, eye_y
+
+    try:
+        # Run the same startup animations as the standalone OLED code.
+        wake_up()
+        happy_face()
+        curious_look()
+
+        print("OLED eyes animation running.")
+
+        next_blink = time.monotonic() + random.uniform(1.27, 1.6)
+        next_look = time.monotonic() + random.uniform(0.13, 0.33)
+        last_direction = 0
+
+        while not oled_stop_event.is_set():
+            now = time.monotonic()
+            direction = eye_direction
+
+            # Robot turns take priority over random eye movement.
+            if direction != 0:
+                target_x = -MAX_X if direction < 0 else MAX_X
+                if last_direction != direction or eye_x != target_x or eye_y != 0:
+                    move_eyes(target_x, 0, duration=0.04)
+                last_direction = direction
+
+                if now >= next_blink:
+                    blink()
+                    next_blink = (
+                        time.monotonic()
+                        + random.uniform(1.27, 1.6)
+                    )
+
+                time.sleep(0.002)
+                continue
+
+            # Once the turn ends, bring the eyes back to the centre.
+            if last_direction != 0:
+                move_eyes(0, 0, duration=0.06)
+                last_direction = 0
+                next_look = time.monotonic() + random.uniform(0.13, 0.33)
+
+            if now >= next_blink:
+                blink()
+                next_blink = (
+                    time.monotonic()
+                    + random.uniform(1.27, 1.6)
+                )
+
+            if now >= next_look:
+                target_x = random.randint(-MAX_X, MAX_X)
+                target_y = random.randint(-MAX_Y, MAX_Y)
+
+                move_eyes(
+                    target_x,
+                    target_y,
+                    duration=0.04
+                )
+
+                if random.random() < 0.30:
+                    time.sleep(0.04)
+                    move_eyes(0, 0, duration=0.04)
+
+                next_look = (
+                    time.monotonic()
+                    + random.uniform(0.13, 0.33)
+                )
+
+            time.sleep(0.002)
+
+    except Exception as e:
+        print(f"OLED animation error: {e}")
+
+    finally:
+        try:
+            image = Image.new("1", (OLED_WIDTH, OLED_HEIGHT), 0)
+            with I2C_LOCK:
+                display.display(image)
+                display.cleanup()
+            print("OLED cleared.")
+        except Exception as e:
+            print(f"OLED cleanup error: {e}")
+
+
+
+
+# ============================================================
+# MAIN PROGRAM: ROBOT + OLED RUNNING TOGETHER
+# ============================================================
+
+display = None
+oled_thread = None
+
+try:
+    init_pca9685()
+
+    print()
+    print("PCA9685 detected at address 0x40")
+    print("16 Servo Crab Robot")
+    print("--------------------------------")
+    print("8 = FORWARD")
+    print("2 = BACKWARD")
+    print("4 = LEFT")
+    print("6 = RIGHT")
+    print("5 = STOP")
+    print("0 = REST")
+    print("q = QUIT")
+    print("--------------------------------")
+
+    # Set the robot to its original stop position before starting
+    # the OLED thread, so both devices are initialized cleanly.
+    stop_robot()
+
+    # Initialize the OLED and start its animation in the background.
+    oled_serial = i2c(port=I2C_BUS, address=0x3C)
+    display = sh1106(oled_serial)
+
+    oled_thread = threading.Thread(
+        target=oled_animation,
+        name="OLED-Animation",
+        daemon=True
+    )
+    oled_thread.start()
+
+    while True:
+        command = input("\nEnter command: ").strip().lower()
+
+        if command == "8":
+            forward()
+        elif command == "2":
+            backward()
+        elif command == "4":
+            eye_direction = -1  # Eyes look left while the robot turns left.
+            try:
+                left()
+            finally:
+                eye_direction = 0
+        elif command == "6":
+            eye_direction = 1   # Eyes look right while the robot turns right.
+            try:
+                right()
+            finally:
+                eye_direction = 0
+        elif command == "5":
+            print("STOP")
+            stop_robot()
+        elif command == "0":
+            rest()
+        elif command == "q":
+            print("Exiting...")
+            stop_robot()
+            break
+        else:
+            print("Invalid command")
+
+except KeyboardInterrupt:
+    print("\nProgram stopped by user.")
+    try:
+        stop_robot()
+    except Exception:
+        pass
+
+except Exception as e:
+    print("\nERROR:")
+    print(e)
+    print(
+        "\nCheck:"
+        "\n1. PCA9685 address = 0x40"
+        "\n2. OLED address = 0x3C"
+        "\n3. SDA = GPIO17"
+        "\n4. SCL = GPIO27"
+        "\n5. I2C bus = 3"
+        "\n6. PCA9685 VCC = 3.3V (if required by your module)"
+        "\n7. Servo power = suitable external supply"
+        "\n8. Common GND between Pi, PCA9685, and servo supply"
+    )
+
+finally:
+    # Stop and clean up the OLED thread.
+    oled_stop_event.set()
+    if oled_thread is not None and oled_thread.is_alive():
+        oled_thread.join()
+
+    try:
+        bus.close()
+    except Exception:
+        pass
